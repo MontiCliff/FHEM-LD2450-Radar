@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LD2450 MQTT Live Radar Ansicht (120° FoV)</title>
+    <!-- Lade Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com/"></script>
+    <style>
+        /* Spezifische Stile für das SVG-Radar */
+        .radar-area {
+            width: 100%;
+            /* Verhältnis 8:6 (oder 4:3) */
+            height: 450px; 
+            max-width: 800px; 
+            margin: auto;
+            border-radius: 1rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            background-color: #1f2937; /* Dunkelgrauer Hintergrund */
+            overflow: hidden; /* Wichtig, damit die Punkte nicht außerhalb des Containers sichtbar sind */
+        }
+        .target-dot {
+            transition: transform 0.5s ease-out; /* Sanfte Bewegung der Punkte */
+            transform-origin: center;
+        }
+        /* Definiere das Fadenkreuz-Muster */
+        .grid-line {
+            stroke: #4b5563; /* Helle graue Linien */
+            stroke-width: 0.5;
+        }
+        /* Zusätzliche Linie für die Hauptachsen, etwas dicker */
+        .main-axis {
+            stroke: #6b7280;
+            stroke-width: 1;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-4 font-sans">
+
+<!-- Lade die MQTT-Bibliothek -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.2.8/mqtt.min.js"></script>
+
+<div id="app" class="max-w-4xl mx-auto bg-white p-6 rounded-xl shadow-2xl">
+    <h1 class="text-2xl font-bold mb-4 text-gray-800">LD2450 Live Tracker (120° FoV)</h1>
+    <p class="text-sm text-gray-500 mb-6">Ansicht: X (0m bis 8m) | Y (-3m bis +3m). Sensor ist die Basis des Sektors.</p>
+
+    <div class="flex flex-col md:flex-row gap-6">
+
+        <!-- RADAR SVG CONTAINER -->
+        <div id="radar-container" class="radar-area bg-gray-800 p-2 relative">
+            <!-- viewBox 600x450 für 8m x 6m (75 Pixel/Meter) -->
+            <svg id="radar-svg" viewBox="0 0 600 450" preserveAspectRatio="xMidYMid meet" class="w-full h-full">
+                <!-- Hintergrund (Standard-Grau) -->
+                <rect width="600" height="450" fill="#1f2937"/>
+                
+                <!-- === ERFASSUNGSBEREICH (Der gesamte dargestellte Bereich ist nun der FoV) === -->
+                <!-- Der Pfad wird auf das gesamte Rechteck erweitert, da die 120° Grenze außerhalb des 8x6m-Feldes liegt. -->
+                <path d="M 0 225 L 600 0 L 600 450 Z" fill="#374151" opacity="0.8">
+                    <title>Effektiver Erfassungsbereich: Der gesamte dargestellte 8m x 6m Bereich</title>
+                </path>
+                <rect x="0" y="0" width="600" height="450" fill="#374151" opacity="0.8">
+                    <title>Effektiver Erfassungsbereich: Der gesamte dargestellte 8m x 6m Bereich</title>
+                </rect>
+
+                
+                <!-- === GITTERLINIEN (Vertikal - X-Achse/Entfernung) === -->
+                <g class="grid-line" stroke-dasharray="4 4">
+                    <line x1="75" y1="0" x2="75" y2="450" />
+                    <line x1="150" y1="0" x2="150" y2="450" />
+                    <line x1="225" y1="0" x2="225" y2="450" />
+                    <line x1="300" y1="0" x2="300" y2="450" />
+                    <line x1="375" y1="0" x2="375" y2="450" />
+                    <line x1="450" y1="0" x2="450" y2="450" />
+                    <line x1="525" y1="0" x2="525" y2="450" />
+                </g>
+
+                <!-- === GITTERLINIEN (Horizontal - Y-Achse/Seite) === -->
+                <g class="grid-line" stroke-dasharray="4 4">
+                    <line x1="0" y1="75" x2="600" y2="75" />
+                    <line x1="0" y1="150" x2="600" y2="150" />
+                    <line x1="0" y1="300" x2="600" y2="300" />
+                    <line x1="0" y1="375" x2="600" y2="375" />
+                </g>
+                
+                <!-- HAUPTACHSE (Y=0, X-Achse der Welt) -->
+                <line x1="0" y1="225" x2="600" y2="225" class="main-axis" stroke-dasharray="none" />
+                
+                <!-- Beschriftungen -->
+                <g fill="#9ca3af" font-size="12">
+                    <!-- X-Beschriftungen (Entfernung) -->
+                    <text x="80" y="240" text-anchor="middle">1m</text>
+                    <text x="300" y="240" text-anchor="middle">4m</text>
+                    <text x="520" y="240" text-anchor="middle">7m</text>
+                    <!-- Y-Beschriftungen (Seite, am linken Rand) -->
+                    <text x="10" y="70">Y=+2m</text>
+                    <text x="10" y="145">Y=+1m</text>
+                    <text x="10" y="305">Y=-1m</text>
+                    <text x="10" y="380">Y=-2m</text>
+                </g>
+
+
+                <!-- Zentrum des Radars (Sensor-Standort: X=0, Y=0) -->
+                <circle cx="0" cy="225" r="8" fill="#facc15" stroke="#fef08a" stroke-width="2">
+                    <title>LD2450 Sensor (0m, 0m)</title>
+                </circle>
+                
+                <!-- Targets, die sich über den SVG-Raum bewegen -->
+                <g id="targets-layer">
+                    <!-- Target Dots (bis zu 3 Targets) -->
+                    <circle id="target1" class="target-dot" cx="0" cy="225" r="12" fill="#3b82f6" fill-opacity="0.6" stroke="#3b82f6" stroke-width="2" style="display: none;"></circle>
+                    <circle id="target2" class="target-dot" cx="0" cy="225" r="10" fill="#10b981" fill-opacity="0.6" stroke="#10b981" stroke-width="2" style="display: none;"></circle>
+                    <circle id="target3" class="target-dot" cx="0" cy="225" r="8" fill="#f59e0b" fill-opacity="0.6" stroke="#f59e0b" stroke-width="2" style="display: none;"></circle>
+                </g>
+                
+            </svg>
+        </div>
+
+        <!-- STATS PANEL -->
+        <div class="md:w-1/2 p-4 bg-gray-50 rounded-lg shadow-inner flex flex-col space-y-4">
+            <h2 class="text-xl font-semibold border-b pb-2 text-gray-700">Aktuelle Zielinformationen (MQTT)</h2>
+            <div id="info1" class="p-3 bg-white rounded-lg border">
+                <p class="font-medium text-blue-600">Ziel 1 (Blau)</p>
+                <p class="text-sm">X (Entfernung): <span id="x1">0.00</span> m</p>
+                <p class="text-sm">Y (Seite): <span id="y1">0.00</span> m</p>
+                <p class="text-sm">Geschw.: <span id="speed1">0.00</span> m/s</p>
+                <p class="text-xs text-red-500 hidden" id="outOfBounds1">Außerhalb FoV!</p>
+            </div>
+            <div id="info2" class="p-3 bg-white rounded-lg border">
+                <p class="font-medium text-green-600">Ziel 2 (Grün)</p>
+                <p class="text-sm">X (Entfernung): <span id="x2">0.00</span> m</p>
+                <p class="text-sm">Y (Seite): <span id="y2">0.00</span> m</p>
+                <p class="text-sm">Geschw.: <span id="speed2">0.00</span> m/s</p>
+                <p class="text-xs text-red-500 hidden" id="outOfBounds2">Außerhalb FoV!</p>
+            </div>
+            <div id="info3" class="p-3 bg-white rounded-lg border">
+                <p class="font-medium text-yellow-600">Ziel 3 (Gelb)</p>
+                <p class="text-sm">X (Entfernung): <span id="x3">0.00</span> m</p>
+                <p class="text-sm">Y (Seite): <span id="y3">0.00</span> m</p>
+                <p class="text-sm">Geschw.: <span id="speed3">0.00</span> m/s</p>
+                <p class="text-xs text-red-500 hidden" id="outOfBounds3">Außerhalb FoV!</p>
+            </div>
+
+            <div class="mt-4 p-3 bg-indigo-100 rounded-lg">
+                <p class="font-semibold text-indigo-800">Gesamterkannt:</p>
+                <p class="text-lg text-indigo-600"><span id="targets-present">0</span> Targets</p>
+            </div>
+            <div id="status-message" class="text-sm text-center p-2 bg-yellow-100 text-yellow-700 rounded-lg">
+                Verbinde mit MQTT Broker...
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // === KONFIGURATION ===
+    const MOSQUITTO_HOST = window.location.hostname; // Ihre MQTT-Broker-IP oder Hostname
+    const MQTT_WS_PORT = 9001; // Standard-WebSocket-Port für Mosquitto
+    const MQTT_TOPIC = 'fhem/radar/readings'; // Ihr MQTT-Topic
+    const MQTT_BROKER_URL = `ws://${MOSQUITTO_HOST}:${MQTT_WS_PORT}`;
+
+    const TARGET_COUNT = 3;
+    const MAX_X_RANGE = 8;
+    
+    // SVG-Konstanten
+    const SVG_WIDTH = 600;
+    const SVG_HEIGHT = 450;
+    const SCALE_FACTOR = SVG_WIDTH / MAX_X_RANGE;
+    const Y_AXIS_CENTER = SVG_HEIGHT / 2;
+    
+    // Die FoV-Logik wird entfernt, da alle Targets angezeigt werden sollen.
+
+
+    const statusElement = document.getElementById('status-message');
+    let mqttClient = null;
+
+    /**
+     * Prüft, ob ein Ziel innerhalb des sichtbaren SVG-Bereichs liegt (0m bis 8m in X-Richtung).
+     * Da die Beschränkung auf 60° entfernt wurde, dient dies nur noch als Boundary-Check.
+     * @param {number} x X-Koordinate (Entfernung)
+     * @param {number} y Y-Koordinate (Seite)
+     * @returns {boolean} True, wenn innerhalb des definierten 8x6m-Bereichs.
+     */
+    function isInsideBoundary(x, y) {
+        // Targets innerhalb des angezeigten X-Bereichs (0 bis 8m)
+        const x_check = x > 0.01 && x <= MAX_X_RANGE;
+        // Targets innerhalb des angezeigten Y-Bereichs (-3m bis +3m)
+        const y_check = Math.abs(y) <= 3.0; 
+        
+        return x_check && y_check;
+    }
+    
+    // Hilfsfunktion, um den vollen Key für die flache JSON-Struktur zu bekommen
+    function getTargetData(rawData, id) {
+        return {
+            x: rawData[`target${id}_x`],
+            y: rawData[`target${id}_y`],
+            speed: rawData[`target${id}_speed`]
+        };
+    }
+
+    // [MQTT-Verbindungscode]
+    function connectMQTT() {
+        console.log(`Versuche, zu MQTT-Broker zu verbinden: ${MQTT_BROKER_URL}`);
+        statusElement.textContent = `Verbinde mit MQTT Broker (WebSocket an ${MQTT_BROKER_URL})...`;
+        statusElement.classList.remove('bg-red-100', 'text-red-700', 'bg-green-100', 'text-green-700');
+        statusElement.classList.add('bg-yellow-100', 'text-yellow-700');
+
+        try {
+            mqttClient = mqtt.connect(MQTT_BROKER_URL);
+
+            mqttClient.on('connect', () => {
+                console.log('MQTT-Verbindung erfolgreich hergestellt.');
+                statusElement.textContent = `Verbunden mit Mosquitto Broker auf Port ${MQTT_WS_PORT}. Abonniere Topic: ${MQTT_TOPIC}`;
+                statusElement.classList.remove('bg-yellow-100', 'text-yellow-700');
+                statusElement.classList.add('bg-green-100', 'text-green-700');
+                
+                mqttClient.subscribe(MQTT_TOPIC, (err) => {
+                    if (err) {
+                        console.error(`Fehler beim Abonnieren von ${MQTT_TOPIC}:`, err);
+                    } else {
+                        console.log(`Abonniert Topic: ${MQTT_TOPIC}`);
+                    }
+                });
+            });
+
+            mqttClient.on('message', (topic, message) => {
+                const payload = message.toString();
+                if (payload.trim().length > 0 && payload.startsWith('{')) {
+                    parseAndRenderMQTTData(payload);
+                }
+            });
+
+            mqttClient.on('error', (error) => {
+                let detailedMessage = error.message || "Unbekannter Fehler. Prüfen Sie, ob der Broker WebSockets auf diesem Port unterstützt!";
+                
+                if (error.code === 1006 || error.message.includes('code: 1006')) {
+                    detailedMessage = `Verbindung fehlgeschlagen (WebSocket Code 1006). Der Server auf Port ${MQTT_WS_PORT} unterstützt wahrscheinlich keine WebSockets oder die IP-Adresse ist falsch.`;
+                }
+
+                console.error('MQTT-Fehler aufgetreten:', detailedMessage, error);
+                
+                statusElement.textContent = `FEHLER: ${detailedMessage}`;
+                statusElement.classList.remove('bg-green-100', 'bg-yellow-100');
+                statusElement.classList.add('bg-red-100', 'text-red-700');
+            });
+
+            mqttClient.on('close', () => {
+                console.warn('MQTT-Verbindung geschlossen. Versuche Neuverbindung...');
+                statusElement.textContent = 'Verbindung geschlossen. Versuche Neuverbindung...';
+                statusElement.classList.remove('bg-green-100', 'bg-yellow-100');
+                statusElement.classList.add('bg-red-100', 'text-red-700');
+            });
+
+        } catch (error) {
+            console.error('Initialisierungsfehler:', error);
+            statusElement.textContent = `Kritischer Fehler bei der MQTT-Initialisierung: ${error.message}`;
+            statusElement.classList.remove('bg-green-100', 'bg-yellow-100');
+            statusElement.classList.add('bg-red-100', 'text-red-700');
+        }
+    }
+
+
+    /**
+     * Analysiert die empfangene MQTT-JSON-Nachricht (flache Struktur) und rendert die Daten.
+     */
+    function parseAndRenderMQTTData(payload) {
+        let rawData;
+        try {
+            rawData = JSON.parse(payload);
+        } catch (e) {
+            console.error("Fehler beim Parsen der MQTT-Nachricht (kein gültiges JSON):", e);
+            return;
+        }
+
+        const targets = [];
+        const targetsPresent = parseInt(rawData.targetsPresent || rawData.targetspresent || 0); 
+        document.getElementById('targets-present').textContent = targetsPresent;
+
+        for (let i = 1; i <= TARGET_COUNT; i++) {
+            const data = getTargetData(rawData, i);
+            
+            const x = data.x !== undefined ? parseFloat(data.x) : 0;
+            const y = data.y !== undefined ? parseFloat(data.y) : 0;
+            const speed = data.speed !== undefined ? parseFloat(data.speed) : 0;
+            
+            // Ein Target ist aktiv, wenn es Daten hat UND im sichtbaren Boundary-Bereich liegt.
+            const insideBoundary = isInsideBoundary(x, y);
+            const active = x > 0.01 && insideBoundary; 
+
+            targets.push({
+                id: i,
+                x: x,
+                y: y,
+                speed: speed,
+                active: active,
+                insideBoundary: insideBoundary,
+                hasData: x > 0.01 // Zeigt an, ob der Sensor das Target überhaupt sieht
+            });
+        }
+        
+        updateTargets(targets);
+    }
+
+    /**
+     * Aktualisiert die Position der SVG-Punkte und die Anzeige der Stats.
+     */
+    function updateTargets(targets) {
+        if (!targets) return;
+
+        targets.forEach(target => {
+            const svgDot = document.getElementById(`target${target.id}`);
+            const xDisplay = document.getElementById(`x${target.id}`);
+            const yDisplay = document.getElementById(`y${target.id}`);
+            const speedDisplay = document.getElementById(`speed${target.id}`);
+            const infoPanel = document.getElementById(`info${target.id}`);
+            const outOfBoundsMsg = document.getElementById(`outOfBounds${target.id}`);
+
+            // Stat-Werte immer anzeigen
+            xDisplay.textContent = target.x.toFixed(2);
+            yDisplay.textContent = target.y.toFixed(2);
+            speedDisplay.textContent = target.speed.toFixed(2);
+            
+            // Logik zur Anzeige der Stats-Panels und OOB-Nachricht
+            if (target.hasData) {
+                if (target.insideBoundary) {
+                    // Daten vorhanden und im sichtbaren Bereich
+                    outOfBoundsMsg.classList.add('hidden');
+                    infoPanel.classList.remove('opacity-50', 'bg-gray-200', 'bg-yellow-100');
+                    infoPanel.classList.add('bg-white');
+                } else {
+                    // Daten vorhanden, aber außerhalb des 8x6m-Bereichs
+                    outOfBoundsMsg.textContent = 'Außerhalb 8x6m Bereich!';
+                    outOfBoundsMsg.classList.remove('hidden');
+                    infoPanel.classList.remove('opacity-50', 'bg-gray-200');
+                    infoPanel.classList.add('bg-yellow-100');
+                }
+            } else {
+                // Keine Daten vorhanden (Target inaktiv)
+                outOfBoundsMsg.classList.add('hidden');
+                infoPanel.classList.add('opacity-50', 'bg-gray-200');
+                infoPanel.classList.remove('bg-white', 'bg-yellow-100');
+            }
+            
+            // Punkt nur anzeigen, wenn er aktiv ist (Daten da UND im sichtbaren Bereich)
+            if (target.active) {
+                
+                // === X-KOORDINATE (Entfernung) ===
+                const svgX = target.x * SCALE_FACTOR; 
+
+                // === Y-KOORDINATE (Seite) ===
+                // Achtung: Y ist in SVG invertiert.
+                const svgY = Y_AXIS_CENTER - (target.y * SCALE_FACTOR); 
+                
+                const translateX = svgX; 
+                const translateY = svgY - Y_AXIS_CENTER; 
+                
+                svgDot.style.setProperty('transform', `translate(${translateX}px, ${translateY}px)`);
+                svgDot.style.display = 'block';
+                
+            } else {
+                // Target inaktiv: Punkt verstecken und Reset-Position
+                svgDot.style.display = 'none';
+                svgDot.style.setProperty('transform', `translate(0px, 0px)`); 
+            }
+        });
+    }
+
+    // Starte die Anwendung, sobald das DOM geladen ist
+    document.addEventListener('DOMContentLoaded', () => {
+        // Setze alle Info-Panels initial in den inaktiven Zustand
+        for (let i = 1; i <= TARGET_COUNT; i++) {
+            document.getElementById(`info${i}`).classList.add('opacity-50', 'bg-gray-200');
+        }
+        console.log("Starte LD2450 Live View mit MQTT (WebSocket)...");
+        connectMQTT();
+    });
+
+</script>
+</body>
+</html>
