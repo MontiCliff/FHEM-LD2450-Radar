@@ -41,7 +41,6 @@ allow_anonymous true
 sudo systemctl restart mosquitto
 
 2. Script
-
 Datei ld2450_bridge.py herunterladen und auf dem FHEM-Server speichern, wo ist grundsätzlich egal
 
 sudo chmod 655 ld2450_bridge.py 
