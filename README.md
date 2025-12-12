@@ -156,9 +156,7 @@ sub LD2450_Bridge_Control_Start()
   fhem("setreading $NAME script_status gestartet (IP: $fhemIP:$fhemPort)");
   fhem("setreading $NAME current_pid $pid");
   }
-```
 
-```PERL
 sub LD2450_Bridge_Control_Stop()
 {
   my $NAME = "LD2450_Bridge_Control";
