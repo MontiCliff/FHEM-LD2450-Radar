@@ -96,12 +96,12 @@ attr LD2450_Bridge_Control webCmd start:stop
 ```
 ### Jetzt kommt das Notify zum Starten
 ```FHEM
-defmod LD2450_Script_Action_Start notify { LD2450_Bridge_Control_Start();; }
+defmod LD2450_Script_Action_Start notify LD2450_Bridge_Control:start { LD2450_Bridge_Control_Start() }
 attr LD2450_Script_Action_Start room Radar
 ```
 
 ```FHEM
-defmod LD2450_Script_Action_Stop notify { LD2450_Bridge_Control_Stop() }
+defmod LD2450_Script_Action_Stop notify LD2450_Bridge_Control:stop { LD2450_Bridge_Control_Stop() }
 attr LD2450_Script_Action_Stop room Radar
 ```
 Jetzt noch die Kommandos in die 99_myUtils.md
